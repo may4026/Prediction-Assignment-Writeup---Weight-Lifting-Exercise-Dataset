@@ -1,0 +1,225 @@
+---
+title: "PracticalMachineLearningAssignment"
+author: "may4026"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+ In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har
+
+```{r}
+## Load data
+training_data <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+test_data <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+```
+
+## Remove rows with missing or invalid values
+```{r}
+training_data <- training_data[complete.cases(training_data), ]
+test_data <- test_data[complete.cases(test_data), ]
+```
+
+## Load libraries
+```{r}
+library(ggplot2)
+library(lattice)
+library(caret)
+library(rpart)
+library(randomForest)
+```
+
+## Cleaning data
+# Remove columns 1-5 as they are identification only variables
+```{r}
+training_data <- training_data[, -c(1:5)]
+test_data <- test_data[, -c(1:5)]
+```
+
+## Convert character variables to factors
+```{r}
+char_vars <- sapply(training_data, is.character)
+training_data[char_vars] <- lapply(training_data[char_vars], as.factor)
+test_data[char_vars] <- lapply(test_data[char_vars], as.factor)
+```
+
+## Remove rows with invalid values
+```{r}
+invalid_values <- c("#DIV/0!", "0.00")  # Define invalid values
+for (col in names(training_data)) {
+  training_data <- training_data[!training_data[[col]] %in% invalid_values, ]
+}
+for (col in names(test_data)) {
+  test_data <- test_data[!test_data[[col]] %in% invalid_values, ]
+}
+```
+
+## Set seed for reproducibility
+```{r}
+set.seed(123)
+```
+
+## Remove variables with nearly zero variance
+```{r}
+nzv_cols <- nearZeroVar(training_data, saveMetrics = TRUE)$nzv
+training_data_clean <- training_data[, -nzv_cols]
+test_data_clean <- test_data[, -nzv_cols]
+```
+
+# Remove rows with missing values
+```{r}
+training_data_clean <- training_data_clean[complete.cases(training_data_clean), ]
+test_data_clean <- test_data_clean[complete.cases(test_data_clean), ]
+```
+
+# Convert dependent variable to factor with at least two levels
+```{r}
+## Convert dependent variable to factor with at least two levels
+training_data_clean$classe <- as.factor(training_data_clean$classe)
+levels(training_data_clean$classe) <- LETTERS[1:5]  # Convert levels to A, B, C, D, E
+```
+
+# Check levels of dependent variable
+```{r}
+cat("Levels of the dependent variable 'classe':\n")
+print(levels(training_data_clean$classe))
+```
+
+# Remove factor variables with only one level
+```{r}
+single_level_factors <- sapply(training_data_clean, function(x) is.factor(x) && length(unique(x)) == 1)
+training_data_clean <- training_data_clean[, !single_level_factors]
+test_data_clean <- test_data_clean[, !single_level_factors]
+```
+
+## Print unique levels of factor variables
+```{r}
+factor_vars <- sapply(training_data_clean, is.factor)
+for (var in names(training_data_clean)[factor_vars]) {
+  cat("Variable:", var, "\n")
+  cat("Unique levels:", unique(training_data_clean[[var]]), "\n\n")
+}
+```
+
+## Identify factor variables with only one level
+```{r}
+single_level_factors <- sapply(training_data_clean, function(x) is.factor(x) && length(unique(x)) == 1)
+```
+
+## Remove factor variables with only one level
+```{r}
+training_data_clean <- training_data_clean[, !single_level_factors]
+test_data_clean <- test_data_clean[, !single_level_factors]
+```
+
+#Check if there are enough data points for each class
+```{r}
+class_counts <- table(training_data_clean$classe)
+if (any(class_counts < 2)) {
+  insufficient_classes <- names(class_counts[class_counts < 2])
+  cat("Insufficient data points for classes:", paste(insufficient_classes, collapse = ", "), "\n")
+  cat("Please remove or impute data for these classes.")
+  
+} else {
+# Splitting data into training and validation sets
+  in_train <- createDataPartition(training_data_clean$classe, p = 0.7, list = FALSE)
+  training_data_split <- training_data_clean[in_train, ]
+  validation_data_split <- training_data_clean[-in_train, ]
+}
+```
+
+## Check if any predictors have only one level
+```{r}
+single_level_predictors <- sapply(training_data_split, function(x) is.factor(x) && length(unique(x)) == 1)
+if (any(single_level_predictors)) {
+  cat("The following predictors have only one level:\n")
+  print(names(single_level_predictors)[single_level_predictors])
+  stop("Please remove these predictors from the data or handle them appropriately.")
+}
+```
+
+## Check the levels and class of each predictor
+```{r}
+predictor_info <- lapply(training_data_split, function(x) {
+  if (is.factor(x)) {
+    levels <- levels(x)
+    class <- class(x)
+  } else {
+    levels <- NA
+    class <- class(x)
+  }
+  return(list(levels = levels, class = class))
+})
+
+## Print out the information
+for (i in seq_along(predictor_info)) {
+  cat("Predictor:", names(predictor_info)[i], "\n")
+  cat("Class:", predictor_info[[i]]$class, "\n")
+  cat("Levels:", predictor_info[[i]]$levels, "\n\n")
+}
+```
+
+## Predicting the outcome using 3 different models
+# Train GBM Model
+```{r}
+gbm_model <- tryCatch(
+  train(
+    classe ~ .,
+    data = training_data_split,
+    method = "gbm",
+    trControl = trainControl(method = "cv"),
+    verbose = FALSE
+  ),
+  error = function(e) {
+    cat("Error occurred during model training:", conditionMessage(e), "\n")
+    NULL
+  }
+)
+
+if (!is.null(gbm_model)) {
+  print(gbm_model)
+} else {
+  cat("GBM model could not be trained due to errors.\n")
+}
+
+```
+
+# Train Decision Tree Model
+```{r}
+tree_model <- train(classe ~ ., data = training_data_split, method = "rpart", cp = 0.01)
+```
+
+# Train Random Forest Model
+```{r}
+rf_model <- train(classe ~ ., data = training_data_split, method = "rf", ntree = 100)
+```
+
+## Model Evaluation on Validation Dataset
+```{r}
+models <- list(gbm_model, tree_model, rf_model)
+
+results <- lapply(models, function(model) {
+  confusionMatrix(predict(model, newdata = validation_data_split), validation_data_split$classe)
+})
+```
+
+## Select the best-performing model based on cross-validation results
+```{r}
+best_model_index <- which.max(sapply(results, function(x) x$overall['Accuracy']))
+
+best_model <- models[[best_model_index]]
+```
+
+## Final Evaluation on Test Dataset
+```{r}
+final_results <- confusionMatrix(predict(best_model, newdata = test_data_clean), test_data_clean$classe)
+print(final_results)
+```
+## Conclusion
+The greatest accuracy was achieved using the Random Forest Model, which gave an accuracy of 99.6%. Hence, this model was further used to make predictions on the exercise performance for 20 participants.
